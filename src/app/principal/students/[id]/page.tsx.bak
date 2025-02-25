@@ -1,0 +1,224 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import { Box, Container, Typography, Paper, Grid, Card, CardContent, CircularProgress, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
+import { useParams } from 'next/navigation';
+import { Student, getStudentById } from '../../../api/students';
+import { ClassRoom, getClassRoomById } from '../../../api/classrooms';
+import Navbar from '../../../components/Navbar';
+import { Grade, CreateGradeRequest, getStudentGrades, createGrade } from '../../../api/grades';
+import { Lesson } from '../../../api/lessons';
+import { useAuth } from '../../../auth/AuthContext';
+
+export default function StudentDetailsPage() {
+    const { id } = useParams();
+    const { token } = useAuth();
+    const [student, setStudent] = useState<Student | null>(null);
+    const [classroom, setClassroom] = useState<ClassRoom | null>(null);
+    const [grades, setGrades] = useState<Grade[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const fetchData = async () => {
+            try {
+                setLoading(true);
+                if (!token) {
+                    setError('You must be logged in to view student details');
+                    return;
+                }
+
+                // Fetch student details, classroom details, and grades concurrently
+                const studentData = await getStudentById(id as string, token);
+                setStudent(studentData);
+
+                // Fetch classroom details if student data has classroom id
+                if (studentData.classroom?.id) {
+                    const classroomData = await getClassRoomById(studentData.classroom.id, token);
+                    setClassroom(classroomData);
+                }
+
+                // Fetch student grades
+                const gradesData = await getStudentGrades(id as string, token);
+                setGrades(gradesData);
+                
+                setError(null);
+            } catch (err) {
+                setError('Failed to load student data');
+                console.error(err);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (id) {
+            fetchData();
+        }
+    }, [id, token]);
+
+    if (loading) {
+        return (
+            <>
+                <Navbar />
+                <Container>
+                    <Box display="flex" justifyContent="center" alignItems="center" minHeight="80vh">
+                        <CircularProgress />
+                    </Box>
+                </Container>
+            </>
+        );
+    }
+
+    if (error || !student) {
+        return (
+            <>
+                <Navbar />
+                <Container>
+                    <Typography color="error">{error || 'Student not found'}</Typography>
+                </Container>
+            </>
+        );
+    }
+
+    return (
+        <>
+            <Navbar />
+            <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+                <Typography variant="h4" component="h1" gutterBottom>
+                    Student Details
+                </Typography>
+                <Grid container spacing={3}>
+                    <Grid item xs={12} md={6}>
+                        <Paper sx={{ p: 3 }}>
+                            <Typography variant="h6">Personal Information</Typography>
+                            <Box sx={{ mt: 2 }}>
+                                <Typography><strong>First Name:</strong> {student.firstName}</Typography>
+                                <Typography><strong>Last Name:</strong> {student.lastName}</Typography>
+                                <Typography><strong>Student Number:</strong> {student.studentNumber}</Typography>
+                            </Box>
+                        </Paper>
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                        <Paper sx={{ p: 3 }}>
+                            <Typography variant="h6">Classroom Information</Typography>
+                            <Box sx={{ mt: 2 }}>
+                                {classroom ? (
+                                    <>
+                                        <Typography><strong>Classroom:</strong> {classroom.name}</Typography>
+                                        <Typography><strong>Grade:</strong> {classroom.grade}</Typography>
+                                        <Typography><strong>Section:</strong> {classroom.section}</Typography>
+                                    </>
+                                ) : (
+                                    <Typography>No classroom assigned</Typography>
+                                )}
+                            </Box>
+                        </Paper>
+                    </Grid>
+                </Grid>
+
+                <Box display="flex" justifyContent="space-between" alignItems="center" mb={2} mt={4}>
+                    <Typography variant="h5">Grades</Typography>
+                </Box>
+
+                <TableContainer component={Paper}>
+                    <Table>
+                        <TableHead>
+                            <TableRow>
+                                <TableCell>Lesson</TableCell>
+                                <TableCell>Exam Number</TableCell>
+                                <TableCell>Score</TableCell>
+                                <TableCell>Notes</TableCell>
+                            </TableRow>
+                        </TableHead>
+                        <TableBody>
+                            {classroom && classroom.lessons && classroom.lessons.length > 0 ? (
+                                classroom.lessons.map((lesson: Lesson) => {
+                                    // Find grades for this lesson
+                                    const lessonGrades = grades.filter(g => g.lesson.id === lesson.id);
+                                    const hasGrade = lessonGrades.length > 0;
+                                    
+                                    return (
+                                        <TableRow key={`lesson-${lesson.id}`}>
+                                            <TableCell>{lesson.name}</TableCell>
+                                            <TableCell>
+                                                <TextField
+                                                    size="small"
+                                                    type="number"
+                                                    defaultValue={hasGrade ? lessonGrades[0]?.examNumber : ""}
+                                                    placeholder="Exam #"
+                                                    inputProps={{ min: 1, max: 10 }}
+                                                    sx={{ width: '80px' }}
+                                                    onBlur={(e) => {
+                                                        if (e.target.value) {
+                                                            const examNumber = parseInt(e.target.value);
+                                                            const scoreInput = document.getElementById(`score-${lesson.id}`) as HTMLInputElement;
+                                                            const notesInput = document.getElementById(`notes-${lesson.id}`) as HTMLInputElement;
+                                                            
+                                                            if (scoreInput && scoreInput.value) {
+                                                                const score = parseFloat(scoreInput.value);
+                                                                const notes = notesInput ? notesInput.value : '';
+                                                                
+                                                                // Create or update grade
+                                                                const token = localStorage.getItem('token');
+                                                                if (token) {
+                                                                    createGrade({
+                                                                        studentId: student.id,
+                                                                        lessonId: lesson.id,
+                                                                        examNumber,
+                                                                        score,
+                                                                        notes
+                                                                    }, token)
+                                                                    .then(newGrade => {
+                                                                        setGrades(prev => {
+                                                                            // Remove any existing grade for this lesson
+                                                                            const filtered = prev.filter(g => g.lesson.id !== lesson.id);
+                                                                            // Add the new grade
+                                                                            return [...filtered, newGrade];
+                                                                        });
+                                                                    })
+                                                                    .catch(err => {
+                                                                        console.error("Failed to save grade:", err);
+                                                                        setError("Failed to save grade");
+                                                                    });
+                                                            }
+                                                        }
+                                                    }}
+                                                />
+                                            </TableCell>
+                                            <TableCell>
+                                                <TextField
+                                                    id={`score-${lesson.id}`}
+                                                    size="small"
+                                                    type="number"
+                                                    defaultValue={hasGrade ? lessonGrades[0]?.score : ""}
+                                                    placeholder="Score"
+                                                    inputProps={{ min: 0, max: 100, step: 0.1 }}
+                                                    sx={{ width: '80px' }}
+                                                />
+                                            </TableCell>
+                                            <TableCell>
+                                                <TextField
+                                                    id={`notes-${lesson.id}`}
+                                                    size="small"
+                                                    defaultValue={hasGrade ? lessonGrades[0]?.notes || "" : ""}
+                                                    placeholder="Notes"
+                                                    sx={{ width: '150px' }}
+                                                />
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })
+                            ) : (
+                                <TableRow>
+                                    <TableCell colSpan={4} align="center">
+                                        No lessons available
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                        </TableBody>
+                    </Table>
+                </TableContainer>
+            </Container>
+        </>
+    );
+} 
